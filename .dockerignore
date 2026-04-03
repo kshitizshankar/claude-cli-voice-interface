@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+*.wav
+*.mp3
+keys.txt
+.git/
+.gitignore
+README.md
+list_voices.py
+list_all_voices.py
+speak.py
