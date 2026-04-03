@@ -5,3 +5,4 @@ __pycache__/
 *.wav
 *.mp3
 *.opus
+keys.txt
