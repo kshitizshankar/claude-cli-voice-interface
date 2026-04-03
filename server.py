@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Voxtral TTS server — persistent process with streaming playback."""
+"""Voxtral TTS server — persistent process with streaming playback.
+
+Two modes:
+  /speak  — fetches audio AND plays it server-side (local use)
+  /tts    — returns WAV bytes over HTTP, no temp files (Docker / remote use)
+"""
 import os
 import sys
 import re
@@ -7,8 +12,11 @@ import base64
 import subprocess
 import tempfile
 import threading
-from concurrent.futures import ThreadPoolExecutor, Future
-from queue import Queue
+import platform
+import shutil
+import glob
+import time
+from concurrent.futures import ThreadPoolExecutor
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from pathlib import Path
@@ -58,20 +66,34 @@ def reload_keys():
         current_key_index = 0
     return len(API_KEYS)
 
+# ── Platform detection ──
+
+def _detect_platform():
+    """Detect audio playback method: wsl, macos, linux, or windows."""
+    if shutil.which("wslpath"):
+        return "wsl"
+    system = platform.system()
+    if system == "Darwin":
+        return "macos"
+    elif system == "Linux":
+        return "linux"
+    elif system == "Windows":
+        return "windows"
+    return "linux"
+
+PLATFORM = _detect_platform()
+
 # ── Sentence splitting ──
 
 def split_sentences(text):
     """Split text into speakable chunks. Keeps it natural."""
-    # Split on sentence-ending punctuation followed by space or end
     parts = re.split(r'(?<=[.!?])\s+', text.strip())
-    # Merge very short fragments (< 20 chars) with the previous chunk
     merged = []
     for part in parts:
         if merged and len(merged[-1]) < 20:
             merged[-1] = merged[-1] + " " + part
         else:
             merged.append(part)
-    # If only one sentence or short text, don't split
     if len(merged) <= 1 or len(text) < 80:
         return [text]
     return merged
@@ -103,33 +125,69 @@ def fetch_audio(text, voice_id):
 
     return base64.b64decode(resp.json()["audio_data"])
 
-# ── Audio playback ──
+# ── Audio playback (cross-platform) with guaranteed cleanup ──
 
 def play_wav(wav_bytes):
-    """Write wav to temp file and play via Windows audio."""
-    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-        f.write(wav_bytes)
-        tmp_path = f.name
+    """Write wav to temp file, play it, always clean up."""
+    tmp_path = None
     try:
-        win_path = subprocess.run(
-            ["wslpath", "-w", tmp_path],
-            capture_output=True, text=True
-        ).stdout.strip()
-        subprocess.run(
-            ["powershell.exe", "-Command",
-             f"(New-Object Media.SoundPlayer '{win_path}').PlaySync()"],
-            capture_output=True
-        )
+        with tempfile.NamedTemporaryFile(suffix=".wav", prefix="tts_", delete=False) as f:
+            f.write(wav_bytes)
+            tmp_path = f.name
+
+        if PLATFORM == "wsl":
+            win_path = subprocess.run(
+                ["wslpath", "-w", tmp_path],
+                capture_output=True, text=True
+            ).stdout.strip()
+            subprocess.run(
+                ["powershell.exe", "-Command",
+                 f"(New-Object Media.SoundPlayer '{win_path}').PlaySync()"],
+                capture_output=True, timeout=120
+            )
+        elif PLATFORM == "macos":
+            subprocess.run(["afplay", tmp_path], check=True, capture_output=True, timeout=120)
+        elif PLATFORM == "windows":
+            subprocess.run(
+                ["powershell.exe", "-Command",
+                 f"(New-Object Media.SoundPlayer '{tmp_path}').PlaySync()"],
+                capture_output=True, timeout=120
+            )
+        else:  # linux
+            subprocess.run(["aplay", tmp_path], check=True, capture_output=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return "Playback timed out"
     except Exception as e:
-        os.unlink(tmp_path)
         return f"Playback error: {e}"
-    os.unlink(tmp_path)
+    finally:
+        # Always clean up, no matter what
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
     return "ok"
+
+# ── Periodic cleanup of any orphaned temp files ──
+
+def cleanup_stale_wavs():
+    """Delete any tts_*.wav files older than 5 minutes. Runs periodically."""
+    while True:
+        time.sleep(300)  # every 5 minutes
+        try:
+            pattern = os.path.join(tempfile.gettempdir(), "tts_*.wav")
+            cutoff = time.time() - 300
+            for path in glob.glob(pattern):
+                if os.path.getmtime(path) < cutoff:
+                    os.unlink(path)
+                    print(f"Cleaned up stale temp file: {path}")
+        except Exception:
+            pass
 
 # ── Main speak functions ──
 
 def speak_simple(text, tone="neutral"):
-    """Original blocking speak — single API call."""
+    """Blocking speak — single API call."""
     voice_id = PAUL_VOICES.get(tone, PAUL_VOICES["neutral"])
     result = fetch_audio(text, voice_id)
     if isinstance(result, str):
@@ -147,20 +205,16 @@ def speak_streaming(text, tone="neutral"):
     print(f"Streaming {len(sentences)} chunks: {[s[:30] for s in sentences]}")
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        # Kick off first fetch immediately
         futures = [pool.submit(fetch_audio, sentences[0], voice_id)]
 
         for i, sentence in enumerate(sentences):
-            # Wait for current audio
             audio = futures[i].result()
             if isinstance(audio, str):
-                return audio  # error
+                return audio
 
-            # Prefetch next sentence while we play this one
             if i + 1 < len(sentences):
                 futures.append(pool.submit(fetch_audio, sentences[i + 1], voice_id))
 
-            # Play current
             result = play_wav(audio)
             if result != "ok":
                 return result
@@ -183,6 +237,7 @@ class TTSHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
 
+        # ── /reload ──
         if parsed.path == "/reload":
             count = reload_keys()
             self.send_response(200)
@@ -191,32 +246,57 @@ class TTSHandler(BaseHTTPRequestHandler):
             self.wfile.write(f"Reloaded {count} keys".encode())
             return
 
-        if parsed.path != "/speak":
-            self.send_response(404)
-            self.end_headers()
+        # ── /tts — return audio bytes, no server-side playback ──
+        if parsed.path == "/tts":
+            text = params.get("text", [""])[0]
+            tone = params.get("tone", ["neutral"])[0]
+            if not text:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Missing 'text' parameter")
+                return
+
+            voice_id = PAUL_VOICES.get(tone, PAUL_VOICES["neutral"])
+            result = fetch_audio(text, voice_id)
+
+            if isinstance(result, str):
+                self.send_response(500)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(result.encode())
+            else:
+                self.send_response(200)
+                self.send_header("Content-Type", "audio/wav")
+                self.send_header("Content-Length", str(len(result)))
+                self.end_headers()
+                self.wfile.write(result)
             return
 
-        text = params.get("text", [""])[0]
-        tone = params.get("tone", ["neutral"])[0]
-        bg = params.get("bg", ["0"])[0]
+        # ── /speak — fetch + play server-side ──
+        if parsed.path == "/speak":
+            text = params.get("text", [""])[0]
+            tone = params.get("tone", ["neutral"])[0]
+            bg = params.get("bg", ["0"])[0]
 
-        if not text:
-            self.send_response(400)
+            if not text:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Missing 'text' parameter")
+                return
+
+            if bg == "1":
+                result = speak_background(text, tone)
+            else:
+                result = speak_streaming(text, tone)
+
+            self.send_response(200 if result == "ok" else 500)
+            self.send_header("Content-Type", "text/plain")
             self.end_headers()
-            self.wfile.write(b"Missing 'text' parameter")
+            self.wfile.write(result.encode())
             return
 
-        if bg == "1":
-            # Fire and forget — respond immediately
-            result = speak_background(text, tone)
-        else:
-            # Streaming but wait for completion
-            result = speak_streaming(text, tone)
-
-        self.send_response(200 if result == "ok" else 500)
-        self.send_header("Content-Type", "text/plain")
+        self.send_response(404)
         self.end_headers()
-        self.wfile.write(result.encode())
 
     def log_message(self, format, *args):
         pass
@@ -225,10 +305,17 @@ class TTSHandler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
     server = HTTPServer(("0.0.0.0", port), TTSHandler)
+
+    # Start background cleanup thread
+    cleanup_thread = threading.Thread(target=cleanup_stale_wavs, daemon=True)
+    cleanup_thread.start()
+
     print(f"TTS server running on http://localhost:{port}")
-    print(f"  /speak?tone=neutral&text=hello")
-    print(f"  /speak?tone=neutral&text=hello&bg=1  (fire-and-forget)")
-    print(f"  /reload  — hot-reload keys.txt")
+    print(f"  Platform: {PLATFORM}")
+    print(f"  /speak?tone=neutral&text=hello        (server plays audio)")
+    print(f"  /speak?tone=neutral&text=hello&bg=1   (fire-and-forget)")
+    print(f"  /tts?tone=neutral&text=hello           (returns WAV bytes)")
+    print(f"  /reload                                (hot-reload keys)")
     print(f"API keys loaded: {len(API_KEYS)} (auto-rotates on rate limit)")
     try:
         server.serve_forever()
