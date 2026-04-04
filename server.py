@@ -22,16 +22,40 @@ from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 import httpx
 
-PAUL_VOICES = {
-    "neutral":    "c69964a6-ab8b-4f8a-9465-ec0925096ec8",
-    "happy":      "1024d823-a11e-43ee-bf3d-d440dccc0577",
-    "cheerful":   "01d985cd-5e0c-4457-bfd8-80ba31a5bc03",
-    "confident":  "98559b22-62b5-4a64-a7cd-fc78ca41faa8",
-    "excited":    "5940190b-f58a-4c3e-8264-a40d63fd6883",
-    "sad":        "530e2e20-58e2-45d8-b0a5-4594f4915944",
-    "frustrated": "1f017bcb-02e5-460d-989b-db065c0c6122",
-    "angry":      "cb891218-482c-4392-9878-91e8d999d57a",
+# ── Voice presets ──
+# Each voice character maps tones to Mistral voice IDs.
+# Default is "paul". Pass ?voice=oliver or ?voice=jane to switch.
+
+VOICES = {
+    "paul": {
+        "neutral":    "c69964a6-ab8b-4f8a-9465-ec0925096ec8",
+        "happy":      "1024d823-a11e-43ee-bf3d-d440dccc0577",
+        "cheerful":   "01d985cd-5e0c-4457-bfd8-80ba31a5bc03",
+        "confident":  "98559b22-62b5-4a64-a7cd-fc78ca41faa8",
+        "excited":    "5940190b-f58a-4c3e-8264-a40d63fd6883",
+        "sad":        "530e2e20-58e2-45d8-b0a5-4594f4915944",
+        "frustrated": "1f017bcb-02e5-460d-989b-db065c0c6122",
+        "angry":      "cb891218-482c-4392-9878-91e8d999d57a",
+    },
+    "oliver": {
+        "neutral":    "e3596645-b1af-469e-b857-f18ddedc7652",
+    },
+    "jane": {
+        "sarcasm":    "a3e41ea8-020b-44c0-8d8b-f6cc03524e31",
+    },
 }
+
+DEFAULT_VOICE = "paul"
+
+def resolve_voice_id(voice_name, tone):
+    """Resolve a voice name + tone to a Mistral voice ID."""
+    voice_name = voice_name.lower()
+    voice = VOICES.get(voice_name, VOICES[DEFAULT_VOICE])
+    # Try the requested tone, fall back to first available tone for this voice
+    if tone in voice:
+        return voice[tone]
+    # Fall back: first available tone for this voice character
+    return next(iter(voice.values()))
 
 ENV_FILE = Path(__file__).parent / ".env"
 
@@ -51,12 +75,10 @@ def _parse_env_file(path):
 
 def load_keys():
     """Load API keys from .env file (MISTRAL_API_KEYS=key1,key2) or env var."""
-    # Try .env file first
     env = _parse_env_file(ENV_FILE)
     raw = env.get("MISTRAL_API_KEYS") or os.environ.get("MISTRAL_API_KEYS")
 
     if not raw:
-        # Fallback: single key
         raw = env.get("MISTRAL_API_KEY") or os.environ.get("MISTRAL_API_KEY")
         if not raw:
             print("ERROR: No API keys found.")
@@ -210,23 +232,23 @@ def cleanup_stale_wavs():
 
 # ── Main speak functions ──
 
-def speak_simple(text, tone="neutral"):
+def speak_simple(text, tone="neutral", voice="paul"):
     """Blocking speak — single API call."""
-    voice_id = PAUL_VOICES.get(tone, PAUL_VOICES["neutral"])
+    voice_id = resolve_voice_id(voice, tone)
     result = fetch_audio(text, voice_id)
     if isinstance(result, str):
         return result
     return play_wav(result)
 
-def speak_streaming(text, tone="neutral"):
+def speak_streaming(text, tone="neutral", voice="paul"):
     """Streaming speak — split into sentences, prefetch next while playing current."""
-    voice_id = PAUL_VOICES.get(tone, PAUL_VOICES["neutral"])
+    voice_id = resolve_voice_id(voice, tone)
     sentences = split_sentences(text)
 
     if len(sentences) == 1:
-        return speak_simple(text, tone)
+        return speak_simple(text, tone, voice)
 
-    print(f"Streaming {len(sentences)} chunks: {[s[:30] for s in sentences]}")
+    print(f"Streaming {len(sentences)} chunks ({voice}/{tone}): {[s[:30] for s in sentences]}")
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [pool.submit(fetch_audio, sentences[0], voice_id)]
@@ -249,9 +271,9 @@ def speak_streaming(text, tone="neutral"):
 
 bg_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tts-bg")
 
-def speak_background(text, tone="neutral"):
+def speak_background(text, tone="neutral", voice="paul"):
     """Fire and forget — returns immediately, plays in background."""
-    bg_executor.submit(speak_streaming, text, tone)
+    bg_executor.submit(speak_streaming, text, tone, voice)
     return "ok"
 
 # ── HTTP server ──
@@ -270,17 +292,30 @@ class TTSHandler(BaseHTTPRequestHandler):
             self.wfile.write(f"Reloaded {count} keys".encode())
             return
 
+        # ── /voices — list available voices ──
+        if parsed.path == "/voices":
+            import json
+            info = {}
+            for name, tones in VOICES.items():
+                info[name] = list(tones.keys())
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps(info, indent=2).encode())
+            return
+
         # ── /tts — return audio bytes, no server-side playback ──
         if parsed.path == "/tts":
             text = params.get("text", [""])[0]
             tone = params.get("tone", ["neutral"])[0]
+            voice = params.get("voice", [DEFAULT_VOICE])[0]
             if not text:
                 self.send_response(400)
                 self.end_headers()
                 self.wfile.write(b"Missing 'text' parameter")
                 return
 
-            voice_id = PAUL_VOICES.get(tone, PAUL_VOICES["neutral"])
+            voice_id = resolve_voice_id(voice, tone)
             result = fetch_audio(text, voice_id)
 
             if isinstance(result, str):
@@ -300,6 +335,7 @@ class TTSHandler(BaseHTTPRequestHandler):
         if parsed.path == "/speak":
             text = params.get("text", [""])[0]
             tone = params.get("tone", ["neutral"])[0]
+            voice = params.get("voice", [DEFAULT_VOICE])[0]
             bg = params.get("bg", ["0"])[0]
 
             if not text:
@@ -309,9 +345,9 @@ class TTSHandler(BaseHTTPRequestHandler):
                 return
 
             if bg == "1":
-                result = speak_background(text, tone)
+                result = speak_background(text, tone, voice)
             else:
-                result = speak_streaming(text, tone)
+                result = speak_streaming(text, tone, voice)
 
             self.send_response(200 if result == "ok" else 500)
             self.send_header("Content-Type", "text/plain")
@@ -335,9 +371,11 @@ if __name__ == "__main__":
 
     print(f"TTS server running on http://localhost:{port}")
     print(f"  Platform: {PLATFORM}")
-    print(f"  /speak?tone=neutral&text=hello        (server plays audio)")
-    print(f"  /speak?tone=neutral&text=hello&bg=1   (fire-and-forget)")
-    print(f"  /tts?tone=neutral&text=hello           (returns WAV bytes)")
+    print(f"  Voices: {', '.join(VOICES.keys())} (default: {DEFAULT_VOICE})")
+    print(f"  /speak?voice=paul&tone=neutral&text=hello")
+    print(f"  /speak?voice=oliver&text=hello&bg=1")
+    print(f"  /tts?voice=jane&tone=sarcasm&text=hello")
+    print(f"  /voices                                (list voices)")
     print(f"  /reload                                (hot-reload keys)")
     print(f"API keys loaded: {len(API_KEYS)} (auto-rotates on rate limit)")
     try:
