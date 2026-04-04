@@ -10,7 +10,7 @@ Includes a zero-dependency local TTS fallback that needs no API key at all.
 
 ### 1. Voxtral TTS (high quality, needs API key)
 
-Natural-sounding voice with emotional tones via Mistral's free API. Requires a [free API key](https://console.mistral.ai/).
+Natural-sounding voice with emotional tones via Mistral's API. The free tier works for development and testing. Requires an [API key](https://console.mistral.ai/).
 
 ### 2. Local system TTS (instant, zero setup)
 
@@ -78,7 +78,7 @@ curl 'http://localhost:8765/speak?tone=cheerful&text=Hello+world'
 
 ### Get your API keys
 
-Free keys from [console.mistral.ai](https://console.mistral.ai/). Add them to `.env`:
+Get API keys from [console.mistral.ai](https://console.mistral.ai/). Add them to `.env`:
 
 ```bash
 MISTRAL_API_KEYS=key1,key2,key3
@@ -273,7 +273,7 @@ fi
 
 **For Voxtral TTS:**
 - **Python 3.10+** with `httpx` — or just **Docker**
-- **Mistral API key** — free tier works ([console.mistral.ai](https://console.mistral.ai/))
+- **Mistral API key** — free tier works for development/testing, paid plans for production ([console.mistral.ai](https://console.mistral.ai/))
 - For `/speak` (server-side playback): auto-detects `afplay` (macOS), `aplay` (Linux), PowerShell (Windows/WSL)
 
 **For local system TTS:**
