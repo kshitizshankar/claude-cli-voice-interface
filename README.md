@@ -1,8 +1,10 @@
-# Claude CLI Voice Interface
+# CLI AI Agents' Voice Interface
 
-Give Claude Code a voice. Uses [Mistral's Voxtral TTS](https://docs.mistral.ai/capabilities/voice/) to speak Claude's responses aloud — turning your terminal into a conversational AI assistant.
+Give your AI coding agent a voice. Uses [Mistral's Voxtral TTS](https://docs.mistral.ai/capabilities/voice/) to speak responses aloud — turning your terminal into a conversational AI assistant.
 
-Works anywhere: Docker, macOS, Linux, Windows, WSL. Includes a zero-dependency local TTS fallback that needs no API key at all.
+Works with **any CLI agent** that can run shell commands: Claude Code, Cursor, Copilot CLI, Aider, Gemini CLI, or even plain curl. Runs anywhere: Docker, macOS, Linux, Windows, WSL.
+
+Includes a zero-dependency local TTS fallback that needs no API key at all.
 
 ## Two ways to get voice
 
@@ -40,8 +42,8 @@ cp .env.example .env
 # Edit .env with your Mistral API key(s)
 
 # Build and run
-docker build -t claude-voice .
-docker run -d -p 8765:8765 --env-file .env --name claude-voice claude-voice
+docker build -t cli-voice .
+docker run -d -p 8765:8765 --env-file .env --name cli-voice cli-voice
 ```
 
 With Docker, use `/tts` (returns audio bytes) — your client handles playback since the container can't access speakers.
@@ -140,13 +142,15 @@ For multi-sentence text (via `/speak`), the server:
 
 You hear the first words within ~2 seconds, regardless of total text length.
 
-## Using with Claude Code
+## Using with your AI agent
+
+This works with any CLI AI agent that can execute shell commands — Claude Code, Cursor, Copilot CLI, Aider, Gemini CLI, etc.
 
 ### Step 1: Start the server (optional — local TTS needs no server)
 
 **Docker:**
 ```bash
-docker run -d -p 8765:8765 --env-file .env --restart unless-stopped --name claude-voice claude-voice
+docker run -d -p 8765:8765 --env-file .env --restart unless-stopped --name cli-voice cli-voice
 ```
 
 **Native:**
@@ -156,50 +160,52 @@ source .venv/bin/activate
 nohup python3 server.py > /tmp/tts-server.log 2>&1 &
 ```
 
-### Step 2: Tell Claude how to use it
+### Step 2: Add the voice prompt to your agent
 
-Add the prompt below to your Claude Code memory, project instructions (CLAUDE.md), or paste it at the start of a conversation.
+Add the prompt below to your agent's instructions — CLAUDE.md for Claude Code, system prompt for Gemini CLI, custom instructions for Cursor, etc.
 
 ---
 
-## Prompt for Claude Code
+## Voice Prompt for AI Agents
 
-> **Copy everything inside the code block into your Claude Code instructions:**
+> **Copy everything inside the code block into your agent's instructions:**
 
 ```markdown
 ## Voice Output
 
-You can speak responses aloud using voice. You have two options:
+You can speak responses aloud. Always auto-detect which method is available — never ask
+the user if the server is running.
 
-### Option 1: Voxtral TTS Server (high quality, emotional tones)
-If a TTS server is running at http://localhost:8765:
+### How to speak
 
-  Server-side playback (native):
-    curl -s 'http://localhost:8765/speak?tone=TONE&text=URL_ENCODED_TEXT'
+Every time you want to speak, follow this sequence:
 
-  Fire-and-forget (returns instantly):
-    curl -s 'http://localhost:8765/speak?tone=TONE&text=URL_ENCODED_TEXT&bg=1'
+1. Try Voxtral first (high quality):
+   curl -s --max-time 3 -o /tmp/tts_output.wav 'http://localhost:8765/tts?tone=TONE&text=URL_ENCODED_TEXT'
 
-  Client-side playback (Docker/remote):
-    curl -s -o /tmp/tts.wav 'http://localhost:8765/tts?tone=TONE&text=URL_ENCODED_TEXT'
-    Then play with: afplay (Mac), aplay (Linux), or powershell SoundPlayer (Windows).
-    Delete the file after playback.
+2. If that returns HTTP 200, play the audio:
+   - macOS:   afplay /tmp/tts_output.wav
+   - Linux:   aplay /tmp/tts_output.wav
+   - Windows: powershell.exe -Command "(New-Object Media.SoundPlayer '/tmp/tts_output.wav').PlaySync()"
+   - WSL:     convert path with wslpath -w, then use powershell SoundPlayer
+   Then delete /tmp/tts_output.wav.
 
-  Available tones: neutral, cheerful, confident, excited, happy, frustrated, sad, angry.
-  Pick the tone that matches the emotional context of what you are saying.
+3. If Voxtral fails (server down, timeout, error), fall back to local system TTS silently:
+   - macOS:   say "TEXT"
+   - Windows: powershell.exe -Command "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('TEXT')"
+   - WSL:     same as Windows (powershell.exe is accessible from WSL)
+   - Linux:   espeak "TEXT"
 
-### Option 2: Local System TTS (instant fallback, no API needed)
-Use this if the TTS server is unavailable, or for quick low-priority speech:
+Never ask the user whether the server is running. Never mention the fallback unless asked.
+Just try, detect, and speak.
 
-  macOS:     say "TEXT"
-  Windows:   powershell.exe -Command "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('TEXT')"
-  WSL:       powershell.exe -Command "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('TEXT')"
-  Linux:     espeak "TEXT"
+If using the native server directly (not Docker), you can also use:
+  Server-side playback:   curl -s 'http://localhost:8765/speak?tone=TONE&text=URL_ENCODED_TEXT'
+  Fire-and-forget:        curl -s 'http://localhost:8765/speak?tone=TONE&text=URL_ENCODED_TEXT&bg=1'
 
-### When to use which
-- Voxtral for conversations, discussions, anything where voice quality matters.
-- Local TTS for quick confirmations or when the server is down.
-- Try Voxtral first. If it fails or times out, fall back to local TTS silently.
+### Available tones (Voxtral only)
+neutral, cheerful, confident, excited, happy, frustrated, sad, angry.
+Pick the tone that matches the emotional context. Local TTS has no tone support.
 
 ### Rules
 - Voice and text are DIFFERENT channels. Never duplicate content across both.
@@ -208,7 +214,7 @@ Use this if the TTS server is unavailable, or for quick low-priority speech:
 - Text is for: code, file paths, commands, technical details, lists, anything to read or copy.
 - NEVER say file paths, code, URLs, or technical details aloud. That is what text is for.
 - Think: "would a human colleague say this out loud?" If not, it is text-only.
-- Use bg=1 when you do not need to wait for speech to finish before continuing.
+- Use bg=1 (with /speak) when you do not need to wait for speech to finish before continuing.
 
 ### Good examples
 - "Done, the server is updated and running."
