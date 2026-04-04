@@ -181,66 +181,45 @@ Add the prompt below to your agent's instructions — CLAUDE.md for Claude Code,
 
 ## Voice Prompt for AI Agents
 
-> **Copy everything inside the code block into your agent's instructions:**
+> **Copy everything inside the code block into your agent's instructions.**
+> Replace `/path/to/speak.sh` with the actual path where you cloned the repo.
 
 ```markdown
 ## Voice Output
 
-You can speak responses aloud. Always auto-detect which method is available — never ask
-the user if the server is running.
-
-### Platform detection (do this ONCE at the start of a session)
-
-Run this command silently at the start to detect your platform:
-  if command -v wslpath &>/dev/null; then echo "WSL"; elif [[ "$(uname)" == "Darwin" ]]; then echo "MAC"; else echo "LINUX"; fi
-
-- If "WSL": you are in Windows Subsystem for Linux. Use powershell.exe for all audio.
-- If "MAC": you are on macOS. Use afplay for audio, say for local TTS.
-- If "LINUX": you are on native Linux. Use aplay for audio, espeak for local TTS.
+You can speak responses aloud using a helper script. The script handles everything:
+Voxtral TTS if the server is running, automatic fallback to local system TTS if not,
+and cross-platform audio playback (macOS, Linux, Windows, WSL).
 
 ### How to speak
 
-Every time you want to speak, follow this sequence:
+Run this command to speak:
+  /path/to/speak.sh "Your text here" TONE VOICE
 
-1. Try Voxtral first (high quality). Fetch audio:
-   curl -s --max-time 3 -o /tmp/tts_output.wav 'http://localhost:8765/tts?voice=VOICE&tone=TONE&text=URL_ENCODED_TEXT'
+Examples:
+  /path/to/speak.sh "Hello! Let me take a look at this code." cheerful paul
+  /path/to/speak.sh "Interesting approach here." confident oliver
+  /path/to/speak.sh "Oh wonderful, another singleton pattern." sarcasm jane
 
-2. If that succeeds (file exists and is non-empty), play the audio based on your platform:
+Parameters:
+  - Text (required): what to say
+  - Tone (optional, default: neutral): neutral, happy, cheerful, confident, excited, sad, frustrated, angry
+  - Voice (optional, default: paul): paul (US male), oliver (British male), jane (British female)
 
-   WSL (IMPORTANT — aplay will NOT work in WSL, you MUST use powershell.exe):
-     WIN_PATH=$(wslpath -w /tmp/tts_output.wav)
-     powershell.exe -Command "(New-Object Media.SoundPlayer '$WIN_PATH').PlaySync()"
+IMPORTANT: This command blocks for 5-10 seconds while audio plays through the speakers.
+That is normal — it is fetching audio from an API and playing it. Do not cancel it.
+If the TTS server is not running, it automatically falls back to local system TTS (faster, robotic).
 
-   macOS:
-     afplay /tmp/tts_output.wav
+### How it works (so you understand the architecture)
 
-   Linux:
-     aplay /tmp/tts_output.wav
+In WSL, you are running Linux but audio hardware belongs to Windows. Linux audio tools
+like aplay cannot reach Windows speakers. The script handles this by:
+1. Fetching a WAV file from the TTS server (Docker or native)
+2. Converting the Linux file path to a Windows path using wslpath
+3. Playing audio via powershell.exe which runs on the Windows side and can access speakers
+4. Cleaning up the temp file
 
-   Then: rm -f /tmp/tts_output.wav
-
-3. If Voxtral fails (server down, timeout, error), fall back to local system TTS silently:
-
-   WSL or Windows:
-     powershell.exe -Command "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('TEXT')"
-
-   macOS:
-     say "TEXT"
-
-   Linux:
-     espeak "TEXT"
-
-Never ask the user whether the server is running. Never mention the fallback unless asked.
-Just try, detect, and speak.
-
-If using the native server directly (not Docker), you can also use:
-  Server-side playback:   curl -s 'http://localhost:8765/speak?voice=VOICE&tone=TONE&text=URL_ENCODED_TEXT'
-  Fire-and-forget:        curl -s 'http://localhost:8765/speak?voice=VOICE&tone=TONE&text=URL_ENCODED_TEXT&bg=1'
-
-### Available voices
-- paul (default) — US male, tones: neutral, happy, cheerful, confident, excited, sad, frustrated, angry
-- oliver — British male, tone: neutral
-- jane — British female, tone: sarcasm
+On macOS it uses afplay, on native Linux it uses aplay. The script auto-detects.
 
 ### Rules
 - Voice and text are DIFFERENT channels. Never duplicate content across both.
@@ -249,7 +228,6 @@ If using the native server directly (not Docker), you can also use:
 - Text is for: code, file paths, commands, technical details, lists, anything to read or copy.
 - NEVER say file paths, code, URLs, or technical details aloud. That is what text is for.
 - Think: "would a human colleague say this out loud?" If not, it is text-only.
-- Use bg=1 (with /speak) when you do not need to wait for speech to finish before continuing.
 
 ### Good examples
 - "Done, the server is updated and running."
@@ -283,9 +261,10 @@ fi
 | File | Purpose |
 |------|---------|
 | `server.py` | TTS HTTP server with streaming playback, voice selection, and key rotation |
+| `speak.sh` | One-command voice for agents — handles platform detection, playback, and fallback |
 | `Dockerfile` | Container image — Python 3.12-slim + httpx |
 | `.env.example` | Template for API keys |
-| `speak.py` | Standalone CLI script |
+| `speak.py` | Standalone Python CLI script |
 | `LICENSE` | MIT license |
 | `list_voices.py` | List available Voxtral voices |
 | `list_all_voices.py` | List all voices with details |
