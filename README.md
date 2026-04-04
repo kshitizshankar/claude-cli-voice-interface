@@ -95,7 +95,8 @@ Best for native (non-Docker) setups where the server can access your speakers.
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `text` | *(required)* | The text to speak |
-| `tone` | `neutral` | Voice tone (see below) |
+| `voice` | `paul` | Voice character: `paul`, `oliver`, or `jane` |
+| `tone` | `neutral` | Emotional tone (see below) |
 | `bg` | `0` | Set to `1` for fire-and-forget (returns instantly, plays in background) |
 
 For multi-sentence text, uses streaming playback — plays each sentence as it arrives while prefetching the next in parallel.
@@ -107,30 +108,40 @@ Best for Docker, remote deployments, or when the client handles playback.
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `text` | *(required)* | The text to speak |
-| `tone` | `neutral` | Voice tone (see below) |
+| `voice` | `paul` | Voice character: `paul`, `oliver`, or `jane` |
+| `tone` | `neutral` | Emotional tone (see below) |
 
 Returns `audio/wav` content. Zero temp files created server-side.
+
+### `GET /voices` — list available voices
+
+Returns JSON with all voice characters and their available tones.
 
 ### `GET /reload`
 
 Hot-reload `.env` without restarting the server. Use after adding or rotating API keys.
 
-### Available tones
+### Voice characters
 
-This server ships with **Paul** (US English male) as the default voice, configured with 8 emotional tones:
+| Voice | Gender | Accent | Available tones |
+|-------|--------|--------|-----------------|
+| `paul` (default) | Male | US English | neutral, happy, cheerful, confident, excited, sad, frustrated, angry |
+| `oliver` | Male | British English | neutral |
+| `jane` | Female | British English | sarcasm |
 
-| Tone | Use for |
-|------|---------|
-| `neutral` | Default, questions, general speech |
-| `cheerful` | Encouragement, positive feedback |
-| `confident` | Key insights, strong statements |
-| `excited` | Breakthroughs, great moments |
-| `happy` | Positive reinforcement |
-| `frustrated` | Devil's advocate, tension |
-| `sad` | Empathetic moments |
-| `angry` | Pressure-testing, challenging |
+If you request a tone that doesn't exist for a voice (e.g. `oliver` + `excited`), it gracefully falls back to that voice's default tone.
 
-**Want a different voice?** Mistral's Voxtral TTS offers many voices across languages and styles — male, female, casual, formal, and voices in Hindi, Arabic, German, Spanish, French, and more. Browse them with the included `list_voices.py` script, then swap the voice IDs in `server.py`. See the [Voxtral TTS docs](https://docs.mistral.ai/capabilities/voice/) for the full catalog.
+**Want a different voice?** Mistral's Voxtral TTS supports voice cloning from a few seconds of audio — any accent, any language. See the [Voxtral TTS docs](https://docs.mistral.ai/capabilities/voice/) for details. You can also browse all preset voices with the included `list_voices.py` script.
+
+### Multi-agent setup
+
+Give each AI agent a distinct voice so you can tell them apart:
+
+```
+Claude Code  → voice=paul    (US male, 8 emotional tones)
+Gemini CLI   → voice=oliver  (British male)
+Third agent  → voice=jane    (British female, sarcastic)
+```
 
 ## Streaming playback
 
@@ -178,36 +189,58 @@ Add the prompt below to your agent's instructions — CLAUDE.md for Claude Code,
 You can speak responses aloud. Always auto-detect which method is available — never ask
 the user if the server is running.
 
+### Platform detection (do this ONCE at the start of a session)
+
+Run this command silently at the start to detect your platform:
+  if command -v wslpath &>/dev/null; then echo "WSL"; elif [[ "$(uname)" == "Darwin" ]]; then echo "MAC"; else echo "LINUX"; fi
+
+- If "WSL": you are in Windows Subsystem for Linux. Use powershell.exe for all audio.
+- If "MAC": you are on macOS. Use afplay for audio, say for local TTS.
+- If "LINUX": you are on native Linux. Use aplay for audio, espeak for local TTS.
+
 ### How to speak
 
 Every time you want to speak, follow this sequence:
 
-1. Try Voxtral first (high quality):
-   curl -s --max-time 3 -o /tmp/tts_output.wav 'http://localhost:8765/tts?tone=TONE&text=URL_ENCODED_TEXT'
+1. Try Voxtral first (high quality). Fetch audio:
+   curl -s --max-time 3 -o /tmp/tts_output.wav 'http://localhost:8765/tts?voice=VOICE&tone=TONE&text=URL_ENCODED_TEXT'
 
-2. If that returns HTTP 200, play the audio:
-   - macOS:   afplay /tmp/tts_output.wav
-   - Linux:   aplay /tmp/tts_output.wav
-   - Windows: powershell.exe -Command "(New-Object Media.SoundPlayer '/tmp/tts_output.wav').PlaySync()"
-   - WSL:     convert path with wslpath -w, then use powershell SoundPlayer
-   Then delete /tmp/tts_output.wav.
+2. If that succeeds (file exists and is non-empty), play the audio based on your platform:
+
+   WSL (IMPORTANT — aplay will NOT work in WSL, you MUST use powershell.exe):
+     WIN_PATH=$(wslpath -w /tmp/tts_output.wav)
+     powershell.exe -Command "(New-Object Media.SoundPlayer '$WIN_PATH').PlaySync()"
+
+   macOS:
+     afplay /tmp/tts_output.wav
+
+   Linux:
+     aplay /tmp/tts_output.wav
+
+   Then: rm -f /tmp/tts_output.wav
 
 3. If Voxtral fails (server down, timeout, error), fall back to local system TTS silently:
-   - macOS:   say "TEXT"
-   - Windows: powershell.exe -Command "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('TEXT')"
-   - WSL:     same as Windows (powershell.exe is accessible from WSL)
-   - Linux:   espeak "TEXT"
+
+   WSL or Windows:
+     powershell.exe -Command "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('TEXT')"
+
+   macOS:
+     say "TEXT"
+
+   Linux:
+     espeak "TEXT"
 
 Never ask the user whether the server is running. Never mention the fallback unless asked.
 Just try, detect, and speak.
 
 If using the native server directly (not Docker), you can also use:
-  Server-side playback:   curl -s 'http://localhost:8765/speak?tone=TONE&text=URL_ENCODED_TEXT'
-  Fire-and-forget:        curl -s 'http://localhost:8765/speak?tone=TONE&text=URL_ENCODED_TEXT&bg=1'
+  Server-side playback:   curl -s 'http://localhost:8765/speak?voice=VOICE&tone=TONE&text=URL_ENCODED_TEXT'
+  Fire-and-forget:        curl -s 'http://localhost:8765/speak?voice=VOICE&tone=TONE&text=URL_ENCODED_TEXT&bg=1'
 
-### Available tones (Voxtral only)
-neutral, cheerful, confident, excited, happy, frustrated, sad, angry.
-Pick the tone that matches the emotional context. Local TTS has no tone support.
+### Available voices
+- paul (default) — US male, tones: neutral, happy, cheerful, confident, excited, sad, frustrated, angry
+- oliver — British male, tone: neutral
+- jane — British female, tone: sarcasm
 
 ### Rules
 - Voice and text are DIFFERENT channels. Never duplicate content across both.
@@ -249,7 +282,7 @@ fi
 
 | File | Purpose |
 |------|---------|
-| `server.py` | TTS HTTP server with streaming playback and key rotation |
+| `server.py` | TTS HTTP server with streaming playback, voice selection, and key rotation |
 | `Dockerfile` | Container image — Python 3.12-slim + httpx |
 | `.env.example` | Template for API keys |
 | `speak.py` | Standalone CLI script |
