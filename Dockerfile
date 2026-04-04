@@ -8,5 +8,5 @@ COPY server.py .
 
 EXPOSE 8765
 
-# keys.txt must be mounted at runtime: -v /path/to/keys.txt:/app/keys.txt
+# Pass keys via --env-file .env or -e MISTRAL_API_KEYS=key1,key2
 CMD ["python3", "server.py"]

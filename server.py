@@ -33,15 +33,40 @@ PAUL_VOICES = {
     "angry":      "cb891218-482c-4392-9878-91e8d999d57a",
 }
 
-KEYS_FILE = Path(__file__).parent / "keys.txt"
+ENV_FILE = Path(__file__).parent / ".env"
+
+def _parse_env_file(path):
+    """Parse a .env file into a dict."""
+    env = {}
+    if not path.exists():
+        return env
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            key, _, value = line.partition("=")
+            env[key.strip()] = value.strip()
+    return env
 
 def load_keys():
-    if not KEYS_FILE.exists():
-        print(f"ERROR: {KEYS_FILE} not found. Create it with one Mistral API key per line.")
-        sys.exit(1)
-    keys = [line.strip() for line in KEYS_FILE.read_text().splitlines() if line.strip() and not line.startswith("#")]
+    """Load API keys from .env file (MISTRAL_API_KEYS=key1,key2) or env var."""
+    # Try .env file first
+    env = _parse_env_file(ENV_FILE)
+    raw = env.get("MISTRAL_API_KEYS") or os.environ.get("MISTRAL_API_KEYS")
+
+    if not raw:
+        # Fallback: single key
+        raw = env.get("MISTRAL_API_KEY") or os.environ.get("MISTRAL_API_KEY")
+        if not raw:
+            print("ERROR: No API keys found.")
+            print("  Set MISTRAL_API_KEYS=key1,key2 in .env or as an environment variable.")
+            sys.exit(1)
+        return [raw]
+
+    keys = [k.strip() for k in raw.split(",") if k.strip()]
     if not keys:
-        print("ERROR: keys.txt is empty. Add at least one Mistral API key.")
+        print("ERROR: MISTRAL_API_KEYS is empty.")
         sys.exit(1)
     return keys
 
@@ -160,7 +185,6 @@ def play_wav(wav_bytes):
     except Exception as e:
         return f"Playback error: {e}"
     finally:
-        # Always clean up, no matter what
         if tmp_path and os.path.exists(tmp_path):
             try:
                 os.unlink(tmp_path)
@@ -173,7 +197,7 @@ def play_wav(wav_bytes):
 def cleanup_stale_wavs():
     """Delete any tts_*.wav files older than 5 minutes. Runs periodically."""
     while True:
-        time.sleep(300)  # every 5 minutes
+        time.sleep(300)
         try:
             pattern = os.path.join(tempfile.gettempdir(), "tts_*.wav")
             cutoff = time.time() - 300
@@ -306,7 +330,6 @@ if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
     server = HTTPServer(("0.0.0.0", port), TTSHandler)
 
-    # Start background cleanup thread
     cleanup_thread = threading.Thread(target=cleanup_stale_wavs, daemon=True)
     cleanup_thread.start()
 

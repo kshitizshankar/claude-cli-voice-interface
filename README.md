@@ -1,21 +1,35 @@
 # Claude CLI Voice Interface
 
-Give Claude Code a voice. This project uses [Mistral's Voxtral TTS](https://docs.mistral.ai/capabilities/voice/) to speak Claude's responses aloud, turning your terminal into a conversational AI assistant.
+Give Claude Code a voice. Uses [Mistral's Voxtral TTS](https://docs.mistral.ai/capabilities/voice/) to speak Claude's responses aloud — turning your terminal into a conversational AI assistant.
 
-Runs anywhere — native Python, Docker, WSL, macOS, Linux. Audio playback auto-detects your platform.
-
-## How it works
-
-A lightweight Python HTTP server runs in the background. Claude Code (or any tool) sends text to it via HTTP, and you hear it spoken aloud. The server:
-
-- **Streams sentences** — splits text into sentences, plays the first while fetching the next. You hear audio within ~2 seconds instead of waiting for the full response.
-- **Rotates API keys** — manages multiple free Mistral API keys, auto-rotating on rate limits.
-- **Runs persistently** — no cold starts. Start once, use all session.
-- **Two modes** — `/speak` plays audio server-side, `/tts` returns WAV bytes for client-side playback (Docker-friendly).
+Runs anywhere: Docker, macOS, Linux, Windows, WSL.
 
 ## Quick start
 
-### Option A: Native Python
+### Docker (recommended)
+
+```bash
+git clone https://github.com/kshitizshankar/claude-cli-voice-interface.git
+cd claude-cli-voice-interface
+
+# Add your keys
+cp .env.example .env
+# Edit .env with your Mistral API key(s)
+
+# Build and run
+docker build -t claude-voice .
+docker run -d -p 8765:8765 --env-file .env --name claude-voice claude-voice
+```
+
+With Docker, use `/tts` (returns audio bytes) — your client handles playback since the container can't access speakers.
+
+```bash
+# Test it
+curl -o test.wav 'http://localhost:8765/tts?tone=cheerful&text=Hello+world'
+# Play with your OS audio player
+```
+
+### Native Python
 
 ```bash
 git clone https://github.com/kshitizshankar/claude-cli-voice-interface.git
@@ -23,44 +37,33 @@ cd claude-cli-voice-interface
 python3 -m venv .venv
 source .venv/bin/activate
 pip install httpx
-```
 
-Create `keys.txt` with your Mistral API keys (one per line):
+cp .env.example .env
+# Edit .env with your Mistral API key(s)
 
-```
-your-mistral-api-key-1
-your-mistral-api-key-2
-# comment out bad keys with a hash
-```
-
-Start the server:
-
-```bash
 python3 server.py
 ```
 
-### Option B: Docker
-
 ```bash
-docker build -t claude-voice .
-docker run -d -p 8765:8765 -v /path/to/keys.txt:/app/keys.txt claude-voice
-```
-
-With Docker, use the `/tts` endpoint (returns audio bytes) since the container can't access your speakers. Your client (Claude Code, browser, etc.) handles playback.
-
-### Test it
-
-```bash
-# Server-side playback (native only)
+# Test — server plays audio directly
 curl 'http://localhost:8765/speak?tone=cheerful&text=Hello+world'
-
-# Get WAV bytes back (works with Docker too)
-curl -o test.wav 'http://localhost:8765/tts?tone=cheerful&text=Hello+world'
 ```
+
+### Get your API keys
+
+Free keys from [console.mistral.ai](https://console.mistral.ai/). Add them to `.env`:
+
+```bash
+MISTRAL_API_KEYS=key1,key2,key3
+```
+
+Multiple keys enable automatic rotation when one hits rate limits.
 
 ## API
 
 ### `GET /speak` — server plays audio
+
+Best for native (non-Docker) setups where the server can access your speakers.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -68,20 +71,22 @@ curl -o test.wav 'http://localhost:8765/tts?tone=cheerful&text=Hello+world'
 | `tone` | `neutral` | Voice tone (see below) |
 | `bg` | `0` | Set to `1` for fire-and-forget (returns instantly, plays in background) |
 
-For multi-sentence text, streams playback — plays each sentence as it arrives while prefetching the next.
+For multi-sentence text, uses streaming playback — plays each sentence as it arrives while prefetching the next in parallel.
 
 ### `GET /tts` — returns WAV audio bytes
+
+Best for Docker, remote deployments, or when the client handles playback.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `text` | *(required)* | The text to speak |
 | `tone` | `neutral` | Voice tone (see below) |
 
-Returns `audio/wav` content. No temp files created server-side. Ideal for Docker or remote deployments where the client handles playback.
+Returns `audio/wav` content. Zero temp files created server-side.
 
 ### `GET /reload`
 
-Hot-reload `keys.txt` without restarting the server.
+Hot-reload `.env` without restarting the server. Use after adding or rotating API keys.
 
 ### Available tones
 
@@ -98,45 +103,32 @@ All tones use the **Paul** (US English male) voice with different emotional expr
 | `sad` | Empathetic moments |
 | `angry` | Pressure-testing, challenging |
 
-## Files
-
-| File | Purpose |
-|------|---------|
-| `server.py` | TTS HTTP server with streaming playback and key rotation |
-| `speak.py` | Standalone CLI script (uses `MISTRAL_API_KEY` env var) |
-| `keys.txt` | Your Mistral API keys, one per line (gitignored) |
-| `Dockerfile` | Container image — just Python + httpx |
-| `list_voices.py` | Utility to list available Voxtral voices |
-| `list_all_voices.py` | Utility to list all voices with details |
-
 ## Streaming playback
 
-For multi-sentence text, the server:
+For multi-sentence text (via `/speak`), the server:
 
 1. Splits text into sentences
-2. Sends sentence 1 to the Mistral API
-3. Starts playing sentence 1 audio as soon as it arrives
+2. Fetches audio for sentence 1 from the Mistral API
+3. Starts playing sentence 1 as soon as it arrives (~2 seconds)
 4. While sentence 1 plays, prefetches sentence 2 in parallel
 5. Chains through all sentences seamlessly
 
-This means you hear the first words within ~2 seconds, regardless of how long the full text is.
+You hear the first words within ~2 seconds, regardless of total text length.
 
 ## Using with Claude Code
 
-The whole point of this project is to give Claude Code a voice. Here is how to set it up.
-
 ### Step 1: Start the server
+
+**Docker:**
+```bash
+docker run -d -p 8765:8765 --env-file .env --restart unless-stopped --name claude-voice claude-voice
+```
 
 **Native:**
 ```bash
 cd /path/to/claude-cli-voice-interface
 source .venv/bin/activate
 nohup python3 server.py > /tmp/tts-server.log 2>&1 &
-```
-
-**Docker:**
-```bash
-docker run -d -p 8765:8765 -v /path/to/keys.txt:/app/keys.txt claude-voice
 ```
 
 ### Step 2: Tell Claude how to use it
@@ -170,8 +162,8 @@ Pick the tone that matches the emotional context of what you are saying.
 
 **Rules:**
 - Voice and text are DIFFERENT channels. Never duplicate content across both.
-- Voice is for: short reactions, confirmations, questions, encouragement, high-level summaries.
-  For discussions and back-and-forth, longer conversational voice is fine.
+- Voice is for: reactions, confirmations, questions, encouragement, high-level summaries.
+  For discussions and back-and-forth, longer conversational voice is great.
 - Text is for: code, file paths, commands, technical details, lists, anything to read or copy.
 - NEVER say file paths, code, URLs, or technical details aloud. That is what text is for.
 - Think: "would a human colleague say this out loud?" If not, it is text-only.
@@ -190,9 +182,11 @@ Pick the tone that matches the emotional context of what you are saying.
 
 ---
 
-## Running as a background service
+## Auto-start
 
-To auto-start the server, add to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.):
+**Docker** — use `--restart unless-stopped` (shown above).
+
+**Native** — add to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.):
 
 ```bash
 if ! pgrep -f "python3 server.py" > /dev/null; then
@@ -202,17 +196,22 @@ if ! pgrep -f "python3 server.py" > /dev/null; then
 fi
 ```
 
-Or use Docker with `--restart unless-stopped`:
+## Files
 
-```bash
-docker run -d --restart unless-stopped -p 8765:8765 -v /path/to/keys.txt:/app/keys.txt claude-voice
-```
+| File | Purpose |
+|------|---------|
+| `server.py` | TTS HTTP server with streaming playback and key rotation |
+| `Dockerfile` | Container image — Python 3.12-slim + httpx |
+| `.env.example` | Template for API keys |
+| `speak.py` | Standalone CLI script |
+| `list_voices.py` | List available Voxtral voices |
+| `list_all_voices.py` | List all voices with details |
 
 ## Requirements
 
-- **Python 3.10+** with `httpx` (or Docker)
+- **Python 3.10+** with `httpx` — or just **Docker**
 - **Mistral API key** — free tier works ([console.mistral.ai](https://console.mistral.ai/))
-- **Audio playback** (for `/speak` only) — auto-detects: `afplay` (macOS), `aplay` (Linux), PowerShell SoundPlayer (Windows/WSL)
+- For `/speak` (server-side playback): auto-detects `afplay` (macOS), `aplay` (Linux), PowerShell (Windows/WSL)
 
 ## License
 
