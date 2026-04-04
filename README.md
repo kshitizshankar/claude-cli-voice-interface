@@ -274,6 +274,7 @@ fi
 **For Voxtral TTS:**
 - **Python 3.10+** with `httpx` — or just **Docker**
 - **Mistral API key** — free tier works for development/testing, paid plans for production ([console.mistral.ai](https://console.mistral.ai/))
+- **Self-hosted option** — Voxtral TTS can run locally if you have a capable GPU. Zero API calls, zero rate limits, full privacy. Just swap the API endpoint in server.py to point to your local instance.
 - For `/speak` (server-side playback): auto-detects `afplay` (macOS), `aplay` (Linux), PowerShell (Windows/WSL)
 
 **For local system TTS:**
