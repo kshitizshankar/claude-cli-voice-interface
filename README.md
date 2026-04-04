@@ -10,7 +10,7 @@ Includes a zero-dependency local TTS fallback that needs no API key at all.
 
 ### 1. Voxtral TTS (high quality, needs API key)
 
-Natural-sounding voice with 8 emotional tones via Mistral's free API. Requires a [free API key](https://console.mistral.ai/).
+Natural-sounding voice with emotional tones via Mistral's free API. Requires a [free API key](https://console.mistral.ai/).
 
 ### 2. Local system TTS (instant, zero setup)
 
@@ -117,7 +117,7 @@ Hot-reload `.env` without restarting the server. Use after adding or rotating AP
 
 ### Available tones
 
-All tones use the **Paul** (US English male) voice with different emotional expressions:
+This server ships with **Paul** (US English male) as the default voice, configured with 8 emotional tones:
 
 | Tone | Use for |
 |------|---------|
@@ -129,6 +129,8 @@ All tones use the **Paul** (US English male) voice with different emotional expr
 | `frustrated` | Devil's advocate, tension |
 | `sad` | Empathetic moments |
 | `angry` | Pressure-testing, challenging |
+
+**Want a different voice?** Mistral's Voxtral TTS offers many voices across languages and styles — male, female, casual, formal, and voices in Hindi, Arabic, German, Spanish, French, and more. Browse them with the included `list_voices.py` script, then swap the voice IDs in `server.py`. See the [Voxtral TTS docs](https://docs.mistral.ai/capabilities/voice/) for the full catalog.
 
 ## Streaming playback
 
@@ -155,7 +157,7 @@ docker run -d -p 8765:8765 --env-file .env --restart unless-stopped --name cli-v
 
 **Native:**
 ```bash
-cd /path/to/claude-cli-voice-interface
+cd /path/to/cli-agents-voice-interface
 source .venv/bin/activate
 nohup python3 server.py > /tmp/tts-server.log 2>&1 &
 ```
@@ -237,7 +239,7 @@ Pick the tone that matches the emotional context. Local TTS has no tone support.
 
 ```bash
 if ! pgrep -f "python3 server.py" > /dev/null; then
-    cd /path/to/claude-cli-voice-interface
+    cd /path/to/cli-agents-voice-interface
     source .venv/bin/activate
     nohup python3 server.py > /tmp/tts-server.log 2>&1 &
 fi
