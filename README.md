@@ -34,8 +34,8 @@ espeak "Hello world"
 ### Docker (recommended)
 
 ```bash
-git clone https://github.com/kshitizshankar/claude-cli-voice-interface.git
-cd claude-cli-voice-interface
+git clone https://github.com/kshitizshankar/cli-agents-voice-interface.git
+cd cli-agents-voice-interface
 
 # Add your keys
 cp .env.example .env
@@ -59,8 +59,8 @@ aplay test.wav         # Linux
 ### Native Python
 
 ```bash
-git clone https://github.com/kshitizshankar/claude-cli-voice-interface.git
-cd claude-cli-voice-interface
+git clone https://github.com/kshitizshankar/cli-agents-voice-interface.git
+cd cli-agents-voice-interface
 python3 -m venv .venv
 source .venv/bin/activate
 pip install httpx
